@@ -1,4 +1,13 @@
-all: sudoku
+CC    = g++
+FLAGS = -std=c++0x -Wall -Wno-sign-compare -O2 #-g
+HDRS  = sudoku.h
+SRCS  = sudoku.cpp solver.cpp
+OUT   = solver
 
-sudoku: sudoku.h sudoku.cpp solver.cpp
-	g++ -g -Wall -Wno-sign-compare -std=c++0x -o solver sudoku.cpp solver.cpp
+all: $(OUT)
+
+$(OUT): $(HDRS) $(SRCS)
+	$(CC) $(FLAGS) -o $(OUT) $(SRCS)
+
+clean:
+	rm $(OUT)

@@ -6,13 +6,19 @@
 #include "sudoku.h"
 
 using namespace std;
-using namespace boost;
 
-typedef unordered_map<int, cellset> symmap;
+typedef boost::unordered_map<int, cellset> symmap;
 
 template <typename T>
 struct reversemap {
-  typedef unordered_map<T, symmap> t;
+  typedef boost::unordered_map<T, symmap> t;
+};
+
+enum grouptype {
+  NONE,
+  ROW,
+  COL,
+  BLK
 };
 
 template <typename InputIterator>
@@ -23,12 +29,30 @@ void print_container(InputIterator first, InputIterator last) {
   cout << '}' << endl;
 }
 
-enum grouptype {
-  NONE,
-  ROW,
-  COL,
-  BLK
-};
+template <typename T>
+bool erase_all(boost::unordered_set<T> &s1,
+               const boost::unordered_set<T> &s2) {
+  bool erased = false;
+  for (typename boost::unordered_set<T>::const_iterator it = s2.begin();
+       it != s2.end(); ++it)
+    if (s1.erase(*it) > 0)
+      erased = true;
+  return erased;
+}
+
+template <typename T>
+bool subsetof(const boost::unordered_set<T> &s1,
+              const boost::unordered_set<T> &s2) {
+  for (typename boost::unordered_set<T>::const_iterator it = s1.begin();
+       it != s1.end(); ++it)
+    if (s2.find(*it) == s2.end())
+      return false;
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// -------------------------------- AC3 --------------------------------------
+// ---------------------------------------------------------------------------
 
 bool ArcReduce(Sudoku &board, const cell &c, bool *error) {
   bool change = false;
@@ -44,28 +68,18 @@ bool ArcReduce(Sudoku &board, const cell &c, bool *error) {
   }
   if (dom.size() == 0)
     *error = true;
-  /*
-  for (symset::const_iterator it = dom.begin(); it != dom.end(); ++it) {
-    const vector<cell> &con = board.conflicting(c);
-    for (vector<cell>::const_iterator it2 = con.begin();
-         it2 != con.end() ++it2) {
-      const symset &dom2 = board[*it2];
-      if (dom2.size() == 1 && dom2.find(*it) != dom2.end()) {
-        //change->insert(*it2);
-        dom.erase(*it);
-        change = true;
-      }
-    }
-  }
-  */
   return change;
 }
 
 bool AC3(Sudoku &board) {
   cellset todo;
-  for (int i = 0; i < board.length(); i++)
-    for (int j = 0; j < board.length(); j++)
+  for (int i = 0; i < board.length(); i++) {
+    for (int j = 0; j < board.length(); j++) {
+      if (board[i][j].size() == 0)
+        return false;
       todo.insert(cell(i, j));
+    }
+  }
   while (!todo.empty()) {
     cell c = *todo.begin();
     todo.erase(todo.begin());
@@ -81,10 +95,18 @@ bool AC3(Sudoku &board) {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// ----------------------------- Swordfish -----------------------------------
+// ---------------------------------------------------------------------------
+
 // TODO
 bool Swordfish(Sudoku &board) {
   return false;
 }
+
+// ---------------------------------------------------------------------------
+// --------------------------- Symbol Removal --------------------------------
+// ---------------------------------------------------------------------------
 
 struct groups {
   unsigned int row;
@@ -117,24 +139,6 @@ groups SameGroup(const Sudoku &board, const cellset &cells,
   return g;
 }
 
-bool erase_all(symset &set1, const symset &set2) {
-  bool erased = false;
-  for (symset::const_iterator it = set2.begin(); it != set2.end(); ++it)
-    if (set1.erase(*it) > 0)
-      erased = true;
-  return erased;
-}
-
-template <typename T>
-bool subsetof(const boost::unordered_set<T> &s1,
-              const boost::unordered_set<T> &s2) {
-  for (typename boost::unordered_set<T>::const_iterator it = s1.begin();
-       it != s1.end(); ++it)
-    if (s2.find(*it) == s2.end())
-      return false;
-  return true;
-}
-
 // Removes the symbols 'syms' from all other cells in the same
 // group as 'cells'.
 // If the symbols have already been removed from a group, pass ROW, COL,
@@ -165,6 +169,65 @@ bool RemoveSymsFromOtherCells(Sudoku &board, const cellset &cells,
   return change;
 }
 
+// ---------------------------------------------------------------------------
+// ------------------------- Naked Permutations ------------------------------
+// ---------------------------------------------------------------------------
+
+// Checks to see whether cell 'c' with domain 'dom' is a superset of a
+// naked permutation in a group (which is given by 'TYPE').
+template <grouptype TYPE>
+bool SearchGroupForNaked(Sudoku &board, cellset &done, const symset &dom,
+                         const cell &c) {
+  if (done.find(c) == done.end()) {
+    cellset found;
+    found.insert(c);
+    for (int x = 0; x < board.length(); x++) {
+      cell c2 (c);
+      if (TYPE == ROW)
+        c2.j = x;
+      else if (TYPE == COL)
+        c2.i = x;
+      if (board[c2].size() == 1)
+        continue;
+      if (c2 != c && done.find(c2) == done.end() &&
+          subsetof(board[c2], dom)) {
+        found.insert(c2);
+      }
+    }
+    if (found.size() == dom.size()) {
+      done.insert(found.begin(), found.end());
+      return RemoveSymsFromOtherCells(board, found, dom, NONE);
+    }
+  }
+  return false;
+}
+
+// Checks to see whether cell 'c' with domain 'dom' is a superset of a
+// naked permutation in a group (which is given by 'TYPE').
+template <>
+bool SearchGroupForNaked<BLK>(Sudoku &board, cellset &done, const symset &dom,
+                              const cell &c) {
+  if (done.find(c) == done.end()) {
+    done.insert(c);
+    cellset found;
+    found.insert(c);
+    cell cnr = board.corner(c);
+    ITERBLOCK(i2, j2, board, cnr) {
+      cell c2 (i2, j2);
+      if (board[c2].size() == 1)
+        continue;
+      if (c2 != c && done.find(c2) == done.end() &&
+          subsetof(board[c2], dom)) {
+        found.insert(c2);
+      }
+    }
+    if (found.size() == dom.size()) {
+      done.insert(found.begin(), found.end());
+      return RemoveSymsFromOtherCells(board, found, dom, NONE);
+    }
+  }
+  return false;
+}
 /**
  * for each cell c of size k:
  *   find other cells c' with D(c) = D(c')
@@ -189,68 +252,16 @@ bool FindMostNakedPerms(Sudoku &board, unsigned int max_perm_size) {
     if (k == 1 || k > max_perm_size)
       continue;
 
-    // Look for naked perm in this row
-    if (doneR.find(c) == doneR.end()) {
-      cellset foundR;
-      foundR.insert(c);
-      for (int j2 = 0; j2 < board.length(); j2++) {
-        cell c2 (c.i, j2);
-        if (board[c2].size() == 1)
-          continue;
-        if (j2 != c.j && doneR.find(c2) == doneR.end() &&
-            subsetof(board[c2], dom)) {
-          foundR.insert(c2);
-        }
-      }
-      if (foundR.size() == k) {
-        doneR.insert(foundR.begin(), foundR.end());
-        change |= RemoveSymsFromOtherCells(board, foundR, dom, NONE);
-      }
-    }
-
-    // Look for naked perm in this column
-    if (doneC.find(c) == doneC.end()) {
-      cellset foundC;
-      foundC.insert(c);
-      for (int i2 = 0; i2 < board.length(); i2++) {
-        cell c2 (i2, c.j);
-        if (board[c2].size() == 1)
-          continue;
-        if (i2 != c.i && doneC.find(c2) == doneC.end() &&
-            subsetof(board[c2], dom)) {
-          foundC.insert(c2);
-        }
-      }
-      if (foundC.size() == k) {
-        doneC.insert(foundC.begin(), foundC.end());
-        change |= RemoveSymsFromOtherCells(board, foundC, dom, NONE);
-      }
-    }
-        
-    // Look for naked perm in this block
-    if (doneB.find(c) == doneB.end()) {
-      doneB.insert(c);
-      cellset foundB;
-      foundB.insert(c);
-      cell cnr = board.corner(c);
-      ITERBLOCK(i2, j2, board, cnr) {
-        cell c2 (i2, j2);
-        if (board[c2].size() == 1)
-          continue;
-        if (c2 != c && doneB.find(c2) == doneB.end() &&
-            subsetof(board[c2], dom)) {
-          foundB.insert(c2);
-        }
-      }
-      if (foundB.size() == k) {
-        doneB.insert(foundB.begin(), foundB.end());
-        change |= RemoveSymsFromOtherCells(board, foundB, dom, NONE);
-      }
-    }
-
+    change |= SearchGroupForNaked<ROW>(board, doneR, dom, c);
+    change |= SearchGroupForNaked<COL>(board, doneC, dom, c);
+    change |= SearchGroupForNaked<BLK>(board, doneB, dom, c);
   }
   return change;
 }
+
+// ---------------------------------------------------------------------------
+// ------------------------- Hidden Permutations -----------------------------
+// ---------------------------------------------------------------------------
 
 void MakeReverseMaps(const Sudoku &board,
                      reversemap<unsigned int>::t &rowmap,
@@ -274,7 +285,7 @@ void MakeReverseMaps(const Sudoku &board,
   }
 }
 
-// Delete all but syms from perm
+// Delete all but the symbols in 'syms' from the cells in 'perm'.
 bool ProcessHiddenPerm(Sudoku &board, const cellset &perm,
                        const symset &syms) {
   bool change = false;
@@ -288,6 +299,91 @@ bool ProcessHiddenPerm(Sudoku &board, const cellset &perm,
       }
       else
         ++it2;
+    }
+  }
+  return change;
+}
+
+template <grouptype T>
+struct MapKey {
+  typedef unsigned int key;
+};
+
+template <>
+struct MapKey<BLK> {
+  typedef cell key;
+};
+
+template <grouptype TYPE>
+struct Map {
+  typedef typename reversemap<typename MapKey<TYPE>::key>::t t;
+};
+
+template <grouptype TYPE>
+void FindOtherSyms(const Sudoku &board, const cellset &cells,
+                   symset &others, typename MapKey<TYPE>::key x) {
+}
+
+template <>
+void FindOtherSyms<ROW>(const Sudoku &board, const cellset &cells,
+                        symset &others, MapKey<ROW>::key i) {
+  for (int j = 0; j < board.length(); j++) {
+    if (cells.find(cell(i, j)) == cells.end())
+      others.insert(board[i][j].begin(), board[i][j].end());
+  }
+}
+
+template <>
+void FindOtherSyms<COL>(const Sudoku &board, const cellset &cells,
+                        symset &others, MapKey<COL>::key j) {
+  for (int i = 0; i < board.length(); i++) {
+    if (cells.find(cell(i, j)) == cells.end())
+      others.insert(board[i][j].begin(), board[i][j].end());
+  }
+}
+
+template <>
+void FindOtherSyms<BLK>(const Sudoku &board,  const cellset &cells,
+                        symset &others, MapKey<BLK>::key c) {
+  ITERBLOCK(i, j, board, c) {
+    if (cells.find(cell(i, j)) == cells.end())
+      others.insert(board[i][j].begin(), board[i][j].end());
+  }
+}
+
+template <grouptype TYPE>
+bool SearchGroupForHidden(Sudoku &board, unsigned int max_perm_size,
+                          const typename Map<TYPE>::t &grpmap) {
+  bool change = false;
+  for (typename Map<TYPE>::t::const_iterator it = grpmap.begin();
+       it != grpmap.end(); ++it) {
+    typename MapKey<TYPE>::key x = it->first;
+    const symmap &smap = it->second;
+    for (symmap::const_iterator it2 = smap.begin(); it2 != smap.end(); ++it2) {
+      int sym = it2->first;
+      const cellset &cells = it2->second;
+      int k = cells.size();
+      if (k <= board.blocksize()) {
+        symset singleton;
+        singleton.insert(sym);
+        change |= RemoveSymsFromOtherCells(board, cells, singleton, TYPE);
+      }
+      if (k > max_perm_size)
+        continue;
+      // (union of cells) \ (union of not cells)
+      // if that size is k, we're in business
+      symset others;
+      FindOtherSyms<TYPE>(board, cells, others, x);      
+      symset these;
+      for (cellset::const_iterator it3 = cells.begin();
+           it3 != cells.end(); ++it3)
+        these.insert(board[*it3].begin(), board[*it3].end());
+      erase_all(these, others);
+      if (these.size() == k) {
+        // delete everything from cells not in these
+        // check whether naked perm in other group
+        change |= ProcessHiddenPerm(board, cells, these);
+      }
     }
   }
   return change;
@@ -309,116 +405,16 @@ bool FindMostHiddenPerms(Sudoku &board, unsigned int max_perm_size) {
   reversemap<cell>::t blkmap;
   MakeReverseMaps(board, rowmap, colmap, blkmap);
   
-  // Rows
-  for (reversemap<unsigned int>::t::const_iterator it = rowmap.begin();
-       it != rowmap.end(); ++it) {
-    unsigned int i = it->first;
-    const symmap &smap = it->second;
-    for (symmap::const_iterator it2 = smap.begin(); it2 != smap.end(); ++it2) {
-      int sym = it2->first;
-      const cellset &cells = it2->second;
-      int k = cells.size();
-      if (k < board.blocksize()) {
-        symset singleton;
-        singleton.insert(sym);
-        change |= RemoveSymsFromOtherCells(board, cells, singleton, ROW);
-      }
-      if (k > max_perm_size)
-        continue;
-      // (union of cells) \ (union of not cells)
-      // if that size is k, we're in business
-      symset others;
-      for (int j = 0; j < board.length(); j++) {
-        if (cells.find(cell(i, j)) == cells.end())
-          others.insert(board[i][j].begin(), board[i][j].end());
-      }
-      symset these;
-      for (cellset::const_iterator it3 = cells.begin();
-           it3 != cells.end(); ++it3)
-        these.insert(board[*it3].begin(), board[*it3].end());
-      erase_all(these, others);
-      if (these.size() == k) {
-        // delete everything from cells not in these
-        // check whether naked perm in other group
-        change |= ProcessHiddenPerm(board, cells, these);
-      }
-    }
-  }
-
-  // Columns
-  for (reversemap<unsigned int>::t::const_iterator it = colmap.begin();
-       it != colmap.end(); ++it) {
-    unsigned int j = it->first;
-    const symmap &smap = it->second;
-    for (symmap::const_iterator it2 = smap.begin(); it2 != smap.end(); ++it2) {
-      int sym = it2->first;
-      const cellset &cells = it2->second;
-      int k = cells.size();
-      if (k <= board.blocksize()) {
-        symset singleton;
-        singleton.insert(sym);
-        change |= RemoveSymsFromOtherCells(board, cells, singleton, COL);
-      }
-      if (k > max_perm_size)
-        continue;
-      // (union of cells) \ (union of not cells)
-      // if that size is k, we're in business
-      symset others;
-      for (int i = 0; i < board.length(); i++) {
-        if (cells.find(cell(i, j)) == cells.end())
-          others.insert(board[i][j].begin(), board[i][j].end());
-      }
-      symset these;
-      for (cellset::const_iterator it3 = cells.begin();
-           it3 != cells.end(); ++it3)
-        these.insert(board[*it3].begin(), board[*it3].end());
-      erase_all(these, others);
-      if (these.size() == k) {
-        // delete everything from cells not in these
-        // check whether naked perm in other group
-        change |= ProcessHiddenPerm(board, cells, these);
-      }
-    }
-  }
-  
-  // Blocks
-  for (reversemap<cell>::t::const_iterator it = blkmap.begin();
-       it != blkmap.end(); ++it) {
-    cell c = it->first;
-    const symmap &smap = it->second;
-    for (symmap::const_iterator it2 = smap.begin(); it2 != smap.end(); ++it2) {
-      int sym = it2->first;
-      const cellset &cells = it2->second;
-      int k = cells.size();
-      if (k <= board.blocksize()) {
-        symset singleton;
-        singleton.insert(sym);
-        change |= RemoveSymsFromOtherCells(board, cells, singleton, BLK);
-      }
-      if (k > max_perm_size)
-        continue;
-      // (union of cells) \ (union of not cells)
-      // if that size is k, we're in business
-      symset others;
-      ITERBLOCK(i, j, board, c) {
-        if (cells.find(cell(i, j)) == cells.end())
-          others.insert(board[i][j].begin(), board[i][j].end());
-      }
-      symset these;
-      for (cellset::const_iterator it3 = cells.begin();
-           it3 != cells.end(); ++it3)
-        these.insert(board[*it3].begin(), board[*it3].end());
-      erase_all(these, others);
-      if (these.size() == k) {
-        // delete everything from cells not in these
-        // check whether naked perm in other group
-        change |= ProcessHiddenPerm(board, cells, these);
-      }
-    }
-  }
+  change |= SearchGroupForHidden<ROW>(board, max_perm_size, rowmap);
+  change |= SearchGroupForHidden<COL>(board, max_perm_size, colmap);
+  change |= SearchGroupForHidden<BLK>(board, max_perm_size, blkmap);
   
   return change;
 }
+
+// ---------------------------------------------------------------------------
+// ------------------------------ Solvers ------------------------------------
+// ---------------------------------------------------------------------------
 
 // TODO nested while loops, common strategies in the inner one
 bool LogicSolve(Sudoku &board) {
@@ -446,6 +442,7 @@ bool GuessSolve(Sudoku &board) {
   bool success = LogicSolve(board);
   if (!success || board.Solved())
     return success;
+  // TODO smarter guess?
   cell guess = board.OrderedCells().front();
   for (symset::const_iterator it = board[guess].begin();
        it != board[guess].end(); ++it) {
