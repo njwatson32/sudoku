@@ -1,7 +1,9 @@
+#include <boost/unordered_map.hpp>
 #include <boost/unordered_set.hpp>
 #include <cstring>
 #include <iostream>
 #include <vector>
+#include <utility>
 
 #include "sudoku.h"
 
@@ -99,9 +101,85 @@ bool AC3(Sudoku &board) {
 // ----------------------------- Swordfish -----------------------------------
 // ---------------------------------------------------------------------------
 
-// TODO
-bool Swordfish(Sudoku &board) {
-  return false;
+template <typename T>
+pair<T, T> set2_to_pair(const boost::unordered_set<T> &set) {
+  pair<T, T> p;
+  for (typename boost::unordered_set<T>::const_iterator it = set.begin();
+       it != set.end(); ++it) {
+    p.first = *it;
+    ++it;
+    p.second = *it;
+  }
+  return p;
+}
+
+template <grouptype TYPE>
+bool CheckSwordfish(Sudoku &board,
+                    const boost::unordered_set<pair<cell, cell> > &corners);
+
+// Check this set of cells for a swordfish
+// Want exactly two indices for column as well
+template <>
+bool CheckSwordfish<ROW>(Sudoku &board,
+                         const boost::unordered_set<pair<cell, cell> > &corners) {
+  bool change = false;
+  boost::unordered_set<unsigned int> safeI;
+  boost::unordered_map<unsigned int, int> foundJ;
+  for (boost::unordered_set<pair<cell, cell> >::const_iterator it = corners.begin();
+       it != corners.end(); ++it) {
+    foundJ[it->second.j]++;
+    // TODO
+  }
+  return change;
+}
+
+// Check this set of cells for a swordfish
+// Want exactly two indices for row as well
+template <>
+bool CheckSwordfish<COL>(Sudoku &board,
+                         const boost::unordered_set<pair<cell, cell> > &corners) {
+  bool change = false;
+  return change;
+}
+  
+
+template <grouptype TYPE>
+bool SwordfishGroup(Sudoku &board, const reversemap<unsigned int>::t &grpmap) {
+  bool change = false;
+  symset done;
+  for (reversemap<unsigned int>::t::const_iterator it = grpmap.begin();
+       it != grpmap.end(); ++it) {
+    //unsigned int x = it->first;
+    const symmap &smap = it->second;
+    for (symmap::const_iterator it2 = smap.begin(); it2 != smap.end(); ++it2) {
+      int sym = it2->first;
+      if (done.find(sym) != done.end())
+        continue;
+      done.insert(sym);
+      const cellset &cells = it2->second;
+      if (cells.size() != 2)
+        continue;
+      // Find the rest of the groups where this symbol appears twice
+      boost::unordered_set<pair<cell, cell> > corners;
+      corners.insert(set2_to_pair(cells));
+      reversemap<unsigned int>::t::const_iterator it3 = it;
+      for (++it3; it3 != grpmap.end(); ++it3) {
+        symmap::const_iterator map_it = it->second.find(sym);
+        if (map_it != it->second.end() && map_it->second.size() == 2)
+          corners.insert(set2_to_pair(map_it->second));
+      }
+      change |= CheckSwordfish<TYPE>(board, corners);
+    }
+  }
+  return change;
+}
+
+bool Swordfish(Sudoku &board, const reversemap<unsigned int>::t &rowmap,
+               const reversemap<unsigned int>::t &colmap) {
+  bool change = false;
+  change |= SwordfishGroup<ROW>(board, rowmap);
+  change |= SwordfishGroup<COL>(board, colmap);
+  return change;
 }
 
 // ---------------------------------------------------------------------------
@@ -321,8 +399,7 @@ struct Map {
 
 template <grouptype TYPE>
 void FindOtherSyms(const Sudoku &board, const cellset &cells,
-                   symset &others, typename MapKey<TYPE>::key x) {
-}
+                   symset &others, typename MapKey<TYPE>::key x);
 
 template <>
 void FindOtherSyms<ROW>(const Sudoku &board, const cellset &cells,
@@ -351,6 +428,14 @@ void FindOtherSyms<BLK>(const Sudoku &board,  const cellset &cells,
   }
 }
 
+/** 
+ * for each sym s:
+ *   find c_1,...,c_k s.t. s in D(c)
+ *   if union of c_i minus the rest of the group has size k:
+ *     we have a hidden perm
+ *
+ * This will catch the case where a symbol can only go in one cell
+ */
 template <grouptype TYPE>
 bool SearchGroupForHidden(Sudoku &board, unsigned int max_perm_size,
                           const typename Map<TYPE>::t &grpmap) {
@@ -389,16 +474,9 @@ bool SearchGroupForHidden(Sudoku &board, unsigned int max_perm_size,
   return change;
 }
 
-/** 
- * for each sym s:
- *   find c_1,...,c_k s.t. s in D(c)
- *   if union of c_i minus the rest of the group has size k:
- *     we have a hidden perm
- *
- * This will catch the case where a symbol can only go in one cell
- */
-bool FindMostHiddenPerms(Sudoku &board, unsigned int max_perm_size) {
-  // Large hidden permutations take more time than they're worth
+// Looks for hidden permutations and swordfish. These are in the same
+// function because they both make use of the symbol maps.
+bool HiddenAndSwordfish(Sudoku &board, unsigned int max_perm_size) {
   bool change = false;
   reversemap<unsigned int>::t rowmap;
   reversemap<unsigned int>::t colmap;
@@ -408,6 +486,8 @@ bool FindMostHiddenPerms(Sudoku &board, unsigned int max_perm_size) {
   change |= SearchGroupForHidden<ROW>(board, max_perm_size, rowmap);
   change |= SearchGroupForHidden<COL>(board, max_perm_size, colmap);
   change |= SearchGroupForHidden<BLK>(board, max_perm_size, blkmap);
+
+  //change |= Swordfish(board, rowmap, colmap);
   
   return change;
 }
@@ -424,16 +504,14 @@ bool LogicSolve(Sudoku &board) {
   while (change) {
     if (!success)
       return false;
-    bool res1 = FindMostHiddenPerms(board, max_perm_size);
+    bool res1 = HiddenAndSwordfish(board, max_perm_size);
     if (res1)
       success &= AC3(board);
     bool res2 = FindMostNakedPerms(board, max_perm_size);
     if (res2)
       success &= AC3(board);
-    bool res3 = Swordfish(board);
-    if (res3)
       success &= AC3(board);
-    change = res1 || res2 || res3;
+    change = res1 || res2;
   }
   return true;
 }
